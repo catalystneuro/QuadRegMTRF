@@ -1,8 +1,9 @@
 import numpy as np
 
 from sklearn.utils import check_consistent_length
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.extmath import safe_sparse_dot
+from sklearn.utils.validation import check_is_fitted
 from scipy import linalg
 
 import matplotlib.pyplot as plt
@@ -70,14 +71,6 @@ class QuadRegMTRF(BaseEstimator):
 
         return Ms
 
-    @staticmethod
-    def _get_lagged_X(data, nt, nlag):
-
-        data = data[:-nlag]
-        X = np.vstack([data[i:i + nt].ravel() for i in range(len(data) - nt + 1)])
-
-        return X
-
     def fit(self, data, targets, nt, nlag=None):
         """
 
@@ -117,29 +110,23 @@ class QuadRegMTRF(BaseEstimator):
         if len(data.shape) != len(self.lambdas):
             raise ValueError('Length of lambdas should match the number of dimensions of data')
 
-        if nlag is None:
-            nlag = nt
-
         check_consistent_length(data, targets)
 
-        self.nt = nt
-        self.nlag = nlag
-
+        self.lagged_data = LaggedData(nt=nt, nlag=nlag)
         self.nfeats_ = data.shape[1]
 
         self.rf_shape_ = [nt, self.nfeats_]
-        self.tt_ = (np.arange(nt) - nlag) * dt
         self.Ms_ = self._get_Ms()
 
-        X = self._get_lagged_X(data, nt, nlag)
+        X = self.lagged_data.transform(data)
 
         y = targets[nlag:]
         self.offset_ = np.mean(y)
-        y -= self.offset  # remove need for intercept in regression
+        y -= self.offset_  # remove need for intercept in regression
 
         self.coefs_ = _solve_quad_reg_cholesky(X, y, self.alpha, self.lambdas, self.Ms_)
 
-        self.rf_ = self.coefs.reshape(self.rf_shape_)
+        self.rf_ = self.coefs_.reshape(self.rf_shape_)
 
     def show_response_function(self, dt, cmap='RdBu_r', anchor_to_zero=True, ax=None):
         """Plot the response function
@@ -172,10 +159,8 @@ class QuadRegMTRF(BaseEstimator):
 
         kwargs = {}
         if anchor_to_zero:
-            kwargs.update(
-                vmax=np.abs(self.rf_.ravel()),
-                vmin=-vmax
-            )
+            vmax = np.abs(self.rf_.ravel())
+            kwargs.update(vmax=vmax, vmin=-vmax)
 
         return ax.imshow(self.rf_, cmap=cmap, extent=extent, aspect='auto', **kwargs)
 
@@ -188,10 +173,39 @@ class QuadRegMTRF(BaseEstimator):
         return dict(alpha=self.alpha, lambdas=self.lambdas)
 
     def predict(self, data):
-        X = self._get_lagged_X(data, self.nt, self.nlag)
 
-        return self.offset_ + np.dot(X, self.coeffs_)
+        check_is_fitted(self, 'coefs_')
+
+        X = self.lagged_data.transform(data)
+
+        return self.offset_ + np.dot(X, self.coefs_)
 
     @staticmethod
     def _more_tags():
         return dict(multioutput=True, stateless=True)
+
+
+class LaggedData(TransformerMixin, BaseEstimator):
+    def __init__(self, nt, *, nlag=None):
+        if nlag is None:
+            nlag = nt
+
+        self.nt = nt
+        self.nlag = nlag
+
+        self.features_shape_ = None
+
+    def fit(self, data):
+        self.features_shape_ = data.shape[1:]
+
+    def transform(self, data):
+
+        if self.features_shape_ is not None:
+            np.testing.assert_array_equal(
+                data.shape[1:], self.features_shape_,
+                "fit data shape does not match input data shape")
+
+        data = data[:-self.nlag]
+        X = np.vstack([data[i:i + self.nt].ravel()
+                       for i in range(len(data) - self.nt + 1)])
+        return X
