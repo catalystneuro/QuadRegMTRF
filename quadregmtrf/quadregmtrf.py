@@ -78,7 +78,7 @@ class QuadRegMTRF(BaseEstimator):
 
         return X
 
-    def fit(self, data, targets, nt, dt, nlag=None):
+    def fit(self, data, targets, nt, nlag=None):
         """
 
         Parameters
@@ -94,8 +94,6 @@ class QuadRegMTRF(BaseEstimator):
         nt: int
             Depth of time window. This is the number of samples in time that will
             be used to create the stimulus window
-        dt: float
-            Sampling period in seconds
         nlag: int, optional
             Defines the time difference in samples between the first time of the X window
             and the corresponding y.
@@ -125,7 +123,6 @@ class QuadRegMTRF(BaseEstimator):
         check_consistent_length(data, targets)
 
         self.nt = nt
-        self.dt = dt
         self.nlag = nlag
 
         self.nfeats_ = data.shape[1]
@@ -144,22 +141,43 @@ class QuadRegMTRF(BaseEstimator):
 
         self.rf_ = self.coefs.reshape(self.rf_shape_)
 
-    def show_receptive_field(self, cmap='RdBu_r', ax=None):
+    def show_response_function(self, dt, cmap='RdBu_r', anchor_to_zero=True, ax=None):
+        """Plot the response function
+
+        Parameters
+        ----------
+        dt: float
+            Sampling period in seconds
+        cmap: str, optional
+            name of colormap to use. Default: 'RdBu_r'
+        anchor_to_zero: bool
+            Make sure 0 is in the middle of the colormap. Only really makes sense for
+            divergent colormaps. Default = True
+        ax: plt.Axes
+
+        Returns
+        -------
+
+        """
 
         if ax is None:
             fig, ax = plt.subplots()
 
         extent = (
-            self.dt * self.nlag,
-            self.dt * (self.nt - self.nlag),
+            -dt * self.nlag,
+            dt * (self.nt - self.nlag),
             0,
             self.nfeats_
         )
 
-        vmax = np.abs(self.rf_.ravel())
-        vmin = -vmax
+        kwargs = {}
+        if anchor_to_zero:
+            kwargs.update(
+                vmax=np.abs(self.rf_.ravel()),
+                vmin=-vmax
+            )
 
-        ax.imshow(self.rf_, cmap=cmap, extent=extent, aspect='auto', vmin=vmin, vmax=vmax)
+        return ax.imshow(self.rf_, cmap=cmap, extent=extent, aspect='auto', **kwargs)
 
     def set_params(self, **parameters):
         for parameter, value in parameters.items():
@@ -167,8 +185,7 @@ class QuadRegMTRF(BaseEstimator):
         return self
 
     def get_params(self, deep=True):
-        return {'alpha': self.alpha,
-                'lambdas': self.lambdas}
+        return dict(alpha=self.alpha, lambdas=self.lambdas)
 
     def predict(self, data):
         X = self._get_lagged_X(data, self.nt, self.nlag)
