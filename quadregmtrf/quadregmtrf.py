@@ -19,6 +19,27 @@ def _solve_quad_reg_cholesky(X, y, alpha, lambdas, Ms):
     return linalg.solve(A, Xy, sym_pos=True, overwrite_a=True).T
 
 
+def discrete_matshow(data, vmin=None, vmax=None, divergent=True, cmap='RdBu_r', ax=None):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    if vmin is None:
+        vmin = np.min(data.ravel())
+
+    if vmax is None:
+        vmax = np.max(data.ravel())
+
+    if divergent:
+        vmax = np.max((vmax, -vmin))
+        vmin = -vmax
+
+    # get discrete colormap
+    cmap = plt.get_cmap(cmap, vmax - vmin + 1)
+
+    # set limits .5 outside true range
+    return ax.matshow(data, cmap=cmap, vmin=vmin - .5, vmax=vmax + .5)
+
+
 class QuadRegMTRF(BaseEstimator):
     """Quadratically regularized multivariate temporal response function
 
@@ -55,10 +76,18 @@ class QuadRegMTRF(BaseEstimator):
         return M
 
     def _get_Ms(self):
+        """Get adjacency matrices for each dimension of the response matrix shape
+
+        Returns
+        -------
+        list of arrays
+            list of adjacency matrices
+
+        """
 
         Ms = []
 
-        shape = self.rf_shape_
+        shape = self.response_matrix_shape_
         nelems = shape[0] * shape[1]
 
         D = np.arange(nelems).reshape(shape)
@@ -115,18 +144,18 @@ class QuadRegMTRF(BaseEstimator):
         self.lagged_data = LaggedData(nt=nt, nlag=nlag)
         self.nfeats_ = data.shape[1]
 
-        self.rf_shape_ = [nt, self.nfeats_]
+        self.response_matrix_shape_ = [nt, self.nfeats_]
         self.Ms_ = self._get_Ms()
 
         X = self.lagged_data.transform(data)
+        y = self.lagged_data.transform_response(targets)
 
-        y = targets[nlag:]
         self.offset_ = np.mean(y)
         y -= self.offset_  # remove need for intercept in regression
 
         self.coefs_ = _solve_quad_reg_cholesky(X, y, self.alpha, self.lambdas, self.Ms_)
 
-        self.rf_ = self.coefs_.reshape(self.rf_shape_)
+        self.response_matrix_ = self.coefs_.reshape(self.response_matrix_shape_)
 
     def show_response_function(self, dt, cmap='RdBu_r', anchor_to_zero=True, ax=None):
         """Plot the response function
@@ -159,10 +188,10 @@ class QuadRegMTRF(BaseEstimator):
 
         kwargs = {}
         if anchor_to_zero:
-            vmax = np.abs(self.rf_.ravel())
+            vmax = np.abs(self.response_matrix_.ravel())
             kwargs.update(vmax=vmax, vmin=-vmax)
 
-        return ax.imshow(self.rf_, cmap=cmap, extent=extent, aspect='auto', **kwargs)
+        return ax.imshow(self.response_matrix_, cmap=cmap, extent=extent, aspect='auto', **kwargs)
 
     def set_params(self, **parameters):
         for parameter, value in parameters.items():
@@ -184,9 +213,30 @@ class QuadRegMTRF(BaseEstimator):
     def _more_tags():
         return dict(multioutput=True, stateless=True)
 
+    @staticmethod
+    def show_Ms(self):
+
+        check_is_fitted(self, 'coefs_')
+
+        nMs = len(self.Ms)
+        fig, axs = plt.subplots(1, nMs)
+
+        for M, ax in zip(self.Ms, axs):
+            mat = discrete_matshow(M, ax=ax)
+
+        # add colorbar without changing size of last image
+        left, bottom, width, height = axs[-1].get_position().bounds
+        cax = fig.add_axes([left + width + 0.05, bottom, 0.03, height])
+        fig.colorbar(mat, cax=cax)
+
+        return fig
+
 
 class LaggedData(TransformerMixin, BaseEstimator):
     def __init__(self, nt, *, nlag=None):
+        if nt <= 1:
+            raise ValueError('nt must be greater than 1')
+
         if nlag is None:
             nlag = nt
 
@@ -209,3 +259,6 @@ class LaggedData(TransformerMixin, BaseEstimator):
         X = np.vstack([data[i:i + self.nt].ravel()
                        for i in range(len(data) - self.nt + 1)])
         return X
+
+    def transform_response(self, response):
+        return response[self.nlag:self.nt]
